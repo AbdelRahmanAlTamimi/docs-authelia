@@ -1,0 +1,239 @@
+name: docs
+
+services:
+  postgresql:
+    image: postgres:16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 1s
+      timeout: 2s
+      retries: 300
+    env_file:
+      - env.d/development/postgresql
+
+  redis:
+    image: redis:5
+
+  mailcatcher:
+    image: sj26/mailcatcher:latest
+
+  minio:
+    user: ${DOCKER_USER:-1000}
+    image: minio/minio
+    restart: no
+    environment:
+      - MINIO_ROOT_USER=impress
+      - MINIO_ROOT_PASSWORD=password
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 20s
+      retries: 300
+    entrypoint: ""
+    command: minio server --console-address :9001 /data
+    volumes:
+      - ./data/media:/data
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+        restart: true
+    entrypoint: >
+      sh -c "
+      /usr/bin/mc alias set impress http://minio:9000 impress password && \
+      /usr/bin/mc mb impress/impress-media-storage && \
+      /usr/bin/mc version enable impress/impress-media-storage && \
+      exit 0;"
+
+  app:
+    build:
+      context: .
+      target: backend-development
+      args:
+        DOCKER_USER: ${DOCKER_USER:-1000}
+    user: ${DOCKER_USER:-1000}
+    image: impress:backend-development
+    environment:
+      - PYLINTHOME=/app/.pylint.d
+      - DJANGO_CONFIGURATION=Demo
+    env_file:
+      - env.d/development/common
+      - env.d/development/postgresql
+    volumes:
+      - ./src/backend:/app
+      - ./data/static:/data/static
+    depends_on:
+        postgresql:
+            condition: service_healthy
+            restart: true
+        mailcatcher:
+          condition: service_started
+        redis:
+          condition: service_started
+        createbuckets:
+          condition: service_started
+
+            #  app:
+            #    build:
+            #      context: .
+            #      target: backend-production
+            #      args:
+            #        DOCKER_USER: ${DOCKER_USER:-1000}
+            #    user: ${DOCKER_USER:-1000}
+            #    image: impress:backend-production
+            #    environment:
+            #      - DJANGO_CONFIGURATION=Demo
+            #    env_file:
+            #      - env.d/development/common
+            #      - env.d/development/postgresql
+            #    depends_on:
+            #      postgresql:
+            #        condition: service_healthy
+            #        restart: true
+            #      redis:
+            #        condition: service_started
+            #      minio:
+            #        condition: service_started
+
+  celery:
+    user: ${DOCKER_USER:-1000}
+    image: impress:backend-production
+    command: ["celery", "-A", "impress.celery_app", "worker", "-l", "INFO"]
+    environment:
+      - DJANGO_CONFIGURATION=Demo
+    env_file:
+      - env.d/development/common
+      - env.d/development/postgresql
+    depends_on:
+      - app
+
+  nginx:
+    image: nginx:1.25
+    ports:
+      - "8083:8083"
+      - "3001:3001"
+    volumes:
+      - ./docker/files/etc/nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      app:
+        condition: service_started
+      y-provider:
+        condition: service_started
+      authelia:
+        condition: service_healthy
+        restart: true
+
+          # WE DONT NEED SWAG, CLOUDFLARE IS HANDLING VARIOUS SSL ASPECTS FOR US!
+          #swag:
+          #  image: lscr.io/linuxserver/swag
+          #  container_name: swag
+          #  cap_add:
+          #    - NET_ADMIN
+          #  environment:
+          #    - PUID=1000
+          #    - PGID=1000
+          #    - TZ=Africa/Cairo
+          #    - URL=nuqayah.org
+          #    - VALIDATION=http
+          #    - SUBDOMAINS=www,app,api,ws,y,auth
+          #    - EMAIL=your@email.com
+          #  volumes:
+          #    - ./docker/files/swag/config:/config
+          #  ports:
+          #    - 443:443
+          #    - 80:80
+          #  restart: unless-stopped
+          #  depends_on:
+          #    app-dev:
+          #      condition: service_started
+          #    y-provider:
+          #      condition:
+          #        service_started
+          #        #keycloak:
+          #        #  condition: service_healthy
+          #        #  restart: true
+          #    authelia:
+          #      condition: service_healthy
+
+  frontend:
+    user: "${DOCKER_USER:-1000}"
+    build: 
+      context: .
+      dockerfile: ./src/frontend/Dockerfile
+      target: frontend-production
+      args:
+        API_ORIGIN: "https://docs.nuqayah.org"
+        Y_PROVIDER_URL: "ws://docs.nuqayah.org"
+        MEDIA_URL: "https://media.nuqayah.org"
+        SW_DEACTIVATED: "true"
+          #image: impress:frontend-development
+    image: impress:frontend-production
+      #ports:
+      #  - "3000:3000"
+
+  # crowdin:
+  #   image: crowdin/cli:3.16.0
+  #   volumes:
+  #     - ".:/app"
+  #   env_file:
+  #     - env.d/development/crowdin
+  #   user: "${DOCKER_USER:-1000}"
+  #   working_dir: /app
+
+  node:
+    image: node:18
+    user: "${DOCKER_USER:-1000}"
+    environment:
+      HOME: /tmp 
+    volumes:
+      - ".:/app"
+
+  y-provider:
+    user: ${DOCKER_USER:-1000}
+    build: 
+      context: .
+      dockerfile: ./src/frontend/servers/y-provider/Dockerfile
+      target: y-provider
+    command: ["yarn", "start"]
+    working_dir: /home/frontend/servers/y-provider
+    restart: unless-stopped
+    env_file:
+      - env.d/development/common
+    ports:
+      - "4444:4444"
+
+  authelia:
+    container_name: "authelia"
+    image:
+      "docker.io/authelia/authelia:latest"
+      #restart: 'unless-stopped'
+    secrets:
+      [
+        "JWT_SECRET",
+        "SESSION_SECRET",
+        "STORAGE_PASSWORD",
+        "STORAGE_ENCRYPTION_KEY",
+      ]
+    environment:
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE: "/run/secrets/JWT_SECRET"
+      AUTHELIA_SESSION_SECRET_FILE:
+        "/run/secrets/SESSION_SECRET"
+        #AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE: '/run/secrets/STORAGE_PASSWORD'
+      AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "/run/secrets/STORAGE_ENCRYPTION_KEY"
+    volumes:
+      - "${PWD}/docker/files/authelia/config:/config"
+
+# -------SECRETS--------- #
+secrets:
+  JWT_SECRET:
+    file: "${PWD}/docker/files/authelia/secrets/JWT_SECRET"
+  SESSION_SECRET:
+    file: "${PWD}/docker/files/authelia/secrets/SESSION_SECRET"
+  STORAGE_PASSWORD:
+    file: "${PWD}/docker/files/authelia/secrets/STORAGE_PASSWORD"
+  STORAGE_ENCRYPTION_KEY:
+    file: "${PWD}/docker/files/authelia/secrets/STORAGE_ENCRYPTION_KEY"

@@ -1,0 +1,44 @@
+docs.nuqayah.org {
+    log {
+        output file /var/log/caddy/docs.nuqayah.org.log
+    }
+
+    # Reverse proxy all requests for this domain to Nginx on port 3001
+    reverse_proxy localhost:3001 {
+        # Pass essential headers to Nginx/backend
+        header_up Host {host}
+        header_up X-Real-IP {remote_ip}
+        header_up X-Forwarded-For {remote_ip} 
+        # Important: Let Nginx know the original request was HTTPS
+        header_up X-Forwarded-Proto {scheme} 
+    }
+}
+
+auth.nuqayah.org {
+    log {
+        output file /var/log/caddy/auth.nuqayah.org.log
+    }
+
+    # Reverse proxy all requests for this domain to Nginx on port 8083
+    reverse_proxy localhost:8083 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_ip}
+        header_up X-Forwarded-For {remote_ip}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Optional: If you intend storage.nuqayah.org to be used directly.
+# Based on your Nginx config, requests to /media/ on this domain would also go 
+# to Nginx on 8083, then to Minio after auth. If this is desired:
+storage.nuqayah.org {
+    log {
+        output file /var/log/caddy/storage.nuqayah.org.log
+    }
+    reverse_proxy localhost:8083 {
+        header_up Host {host}
+        # ... other headers ...
+    }
+}
+# If storage.nuqayah.org is just an alias for Minio *without* auth, 
+# you could proxy directly: reverse_proxy localhost:9000
