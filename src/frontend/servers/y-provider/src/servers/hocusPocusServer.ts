@@ -56,7 +56,7 @@ export const hocusPocusServer = Server.configure({
         logger('onConnect: backend error', error.message);
       }
 
-      return Promise.reject(new Error('Backend error: Unauthorized'));
+      return Promise.reject(new Error(`Backend error: Unauthorized - URL: ${request.url}`));
     }
 
     connection.readOnly = !can_edit;
