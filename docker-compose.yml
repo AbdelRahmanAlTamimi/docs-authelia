@@ -4,7 +4,7 @@ services:
   postgresql:
     image: postgres:16
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      test: [ "CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}" ]
       interval: 1s
       timeout: 2s
       retries: 300
@@ -20,11 +20,12 @@ services:
   minio:
     user: ${DOCKER_USER:-1000}
     image: minio/minio
+    restart: no
     environment:
       - MINIO_ROOT_USER=impress
       - MINIO_ROOT_PASSWORD=password
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: [ "CMD", "mc", "ready", "local" ]
       interval: 1s
       timeout: 20s
       retries: 300
@@ -40,13 +41,9 @@ services:
         condition: service_healthy
         restart: true
     entrypoint: >
-      sh -c "
-      /usr/bin/mc alias set impress http://minio:9000 impress password && \
-      /usr/bin/mc mb impress/impress-media-storage && \
-      /usr/bin/mc version enable impress/impress-media-storage && \
-      exit 0;"
+      sh -c " /usr/bin/mc alias set impress http://minio:9000 impress password && \ /usr/bin/mc mb impress/impress-media-storage && \ /usr/bin/mc version enable impress/impress-media-storage && \ exit 0;"
 
-  app-dev:
+  app:
     build:
       context: .
       target: backend-development
@@ -56,65 +53,49 @@ services:
     image: impress:backend-development
     environment:
       - PYLINTHOME=/app/.pylint.d
-      - DJANGO_CONFIGURATION=Development
-    env_file:
-      - env.d/development/common
-      - env.d/development/postgresql
-    volumes:
-      - ./src/backend:/app
-      - ./data/static:/data/static
-    depends_on:
-        postgresql:
-            condition: service_healthy
-            restart: true
-        mailcatcher:
-          condition: service_started
-        redis:
-          condition: service_started
-        createbuckets:
-          condition: service_started
-  
-  celery-dev:
-    user: ${DOCKER_USER:-1000}
-    image: impress:backend-development
-    command: ["celery", "-A", "impress.celery_app", "worker", "-l", "DEBUG"]
-    environment:
-      - DJANGO_CONFIGURATION=Development
-    env_file:
-      - env.d/development/common
-      - env.d/development/postgresql
-    volumes:
-      - ./src/backend:/app
-      - ./data/static:/data/static
-    depends_on:
-      - app-dev
-
-  app:
-    build:
-      context: .
-      target: backend-production
-      args:
-        DOCKER_USER: ${DOCKER_USER:-1000}
-    user: ${DOCKER_USER:-1000}
-    image: impress:backend-production
-    environment:
       - DJANGO_CONFIGURATION=Demo
     env_file:
       - env.d/development/common
       - env.d/development/postgresql
+    volumes:
+      - ./src/backend:/app
+      - ./data/static:/data/static
     depends_on:
       postgresql:
         condition: service_healthy
         restart: true
+      mailcatcher:
+        condition: service_started
       redis:
         condition: service_started
-      minio:
+      createbuckets:
         condition: service_started
+          #  app:
+          #    build:
+          #      context: .
+          #      target: backend-production
+          #      args:
+          #        DOCKER_USER: ${DOCKER_USER:-1000}
+          #    user: ${DOCKER_USER:-1000}
+          #    image: impress:backend-production
+          #    environment:
+          #      - DJANGO_CONFIGURATION=Demo
+          #    env_file:
+          #      - env.d/development/common
+          #      - env.d/development/postgresql
+          #    depends_on:
+          #      postgresql:
+          #        condition: service_healthy
+          #        restart: true
+          #      redis:
+          #        condition: service_started
+          #      minio:
+          #        condition: service_started
 
   celery:
     user: ${DOCKER_USER:-1000}
     image: impress:backend-production
-    command: ["celery", "-A", "impress.celery_app", "worker", "-l", "INFO"]
+    command: [ "celery", "-A", "impress.celery_app", "worker", "-l", "INFO" ]
     environment:
       - DJANGO_CONFIGURATION=Demo
     env_file:
@@ -128,21 +109,18 @@ services:
     ports:
       - "8083:8083"
       - "3001:3001"
-        # - "80:80"
-        # - "8881:80"
     volumes:
       - ./docker/files/etc/nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
       frontend:
         condition: service_started
-      app-dev:
+      app:
         condition: service_started
       y-provider:
         condition: service_started
       authelia:
         condition: service_healthy
         restart: true
-
           # WE DONT NEED SWAG, CLOUDFLARE IS HANDLING VARIOUS SSL ASPECTS FOR US!
           #swag:
           #  image: lscr.io/linuxserver/swag
@@ -177,7 +155,7 @@ services:
 
   frontend:
     user: "${DOCKER_USER:-1000}"
-    build: 
+    build:
       context: .
       dockerfile: ./src/frontend/Dockerfile
       target: frontend-production
@@ -185,61 +163,49 @@ services:
         API_ORIGIN: "https://docs.nuqayah.org"
         Y_PROVIDER_URL: "ws://docs.nuqayah.org"
         MEDIA_URL: "https://media.nuqayah.org"
-        SW_DEACTIVATED: "true"
-          #image: impress:frontend-development
+        SW_DEACTIVATED: "true" #image: impress:frontend-development
     image: impress:frontend-production
       #ports:
       #  - "3000:3000"
 
-  crowdin:
-    image: crowdin/cli:3.16.0
-    volumes:
-      - ".:/app"
-    env_file:
-      - env.d/development/crowdin
-    user: "${DOCKER_USER:-1000}"
-    working_dir: /app
+  # crowdin:
+  #   image: crowdin/cli:3.16.0
+  #   volumes:
+  #     - ".:/app"
+  #   env_file:
+  #     - env.d/development/crowdin
+  #   user: "${DOCKER_USER:-1000}"
+  #   working_dir: /app
 
   node:
     image: node:18
     user: "${DOCKER_USER:-1000}"
     environment:
-      HOME: /tmp 
+      HOME: /tmp
     volumes:
       - ".:/app"
 
   y-provider:
     user: ${DOCKER_USER:-1000}
-    build: 
+    build:
       context: .
       dockerfile: ./src/frontend/servers/y-provider/Dockerfile
       target: y-provider
-    command: ["yarn", "workspace", "server-y-provider", "run", "dev"]
-    working_dir: /app/frontend
+    command: [ "yarn", "start" ]
+    working_dir: /home/frontend/servers/y-provider
     restart: unless-stopped
     env_file:
       - env.d/development/common
     ports:
       - "4444:4444"
-    volumes:
-      - ./src/frontend/:/app/frontend
+
   authelia:
     container_name: "authelia"
-    image:
-      "docker.io/authelia/authelia:latest"
-      #restart: 'unless-stopped'
-    secrets:
-      [
-        "JWT_SECRET",
-        "SESSION_SECRET",
-        "STORAGE_PASSWORD",
-        "STORAGE_ENCRYPTION_KEY",
-      ]
+    image: "docker.io/authelia/authelia:latest" #restart: 'unless-stopped'
+    secrets: [ "JWT_SECRET", "SESSION_SECRET", "STORAGE_PASSWORD", "STORAGE_ENCRYPTION_KEY" ]
     environment:
       AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE: "/run/secrets/JWT_SECRET"
-      AUTHELIA_SESSION_SECRET_FILE:
-        "/run/secrets/SESSION_SECRET"
-        #AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE: '/run/secrets/STORAGE_PASSWORD'
+      AUTHELIA_SESSION_SECRET_FILE: "/run/secrets/SESSION_SECRET" #AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE: '/run/secrets/STORAGE_PASSWORD'
       AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: "/run/secrets/STORAGE_ENCRYPTION_KEY"
     volumes:
       - "${PWD}/docker/files/authelia/config:/config"
